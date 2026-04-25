@@ -1,0 +1,267 @@
+################################################################################
+# GitHub Actions Workflow - Production Subdomain Takeover Scanner
+# 
+# Purpose: Distributed scanning with 20 parallel jobs
+# Trigger: Push to repository (manual or automatic)
+# 
+# Features:
+# - 20 parallel scanner instances (using matrix strategy)
+# - Each job runs main.sh independently
+# - Shared environment variables from GitHub Actions secrets
+# - Slack notifications for success/failure
+# - Automatic cleanup on completion
+# 
+# Setup Instructions:
+# 1. Add these secrets to GitHub repository settings:
+#    - SLACK_WEBHOOK: Your Slack webhook URL
+#    - SERVER_DOMAIN: Scanner server domain (e.g., server.com:8001)
+#    - BASIC_AUTH: Base64 encoded credentials
+#
+# 2. Configure environment:
+#    - Set git_runner_client variables in repository settings
+################################################################################
+
+name: Production - Subdomain Takeover Scanner (20 Parallel Jobs)
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - production
+  
+  workflow_dispatch:
+    # Allow manual trigger from GitHub UI
+
+env:
+  # Global environment from GitHub secrets
+  SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+  SERVER_DOMAIN: ${{ secrets.SERVER_DOMAIN }}
+  BASIC_AUTH: ${{ secrets.BASIC_AUTH }}
+
+jobs:
+  # Metadata job - runs once to set up information
+  metadata:
+    name: Workflow Metadata
+    runs-on: ubuntu-latest
+    
+    outputs:
+      timestamp: ${{ steps.meta.outputs.timestamp }}
+      run_id: ${{ steps.meta.outputs.run_id }}
+    
+    steps:
+      - name: Generate metadata
+        id: meta
+        run: |
+          echo "timestamp=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
+          echo "run_id=${{ github.run_id }}" >> $GITHUB_OUTPUT
+      
+      - name: Display workflow information
+        run: |
+          echo "╔═══════════════════════════════════════════════════════════╗"
+          echo "║   Production Subdomain Takeover Scanner - Workflow Start   ║"
+          echo "╚═══════════════════════════════════════════════════════════╝"
+          echo "Repository: ${{ github.repository }}"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo "Timestamp: ${{ steps.meta.outputs.timestamp }}"
+          echo "Run ID: ${{ steps.meta.outputs.run_id }}"
+
+  # Validation job - checks environment setup
+  validate-environment:
+    name: Validate Environment
+    runs-on: ubuntu-latest
+    needs: metadata
+    
+    steps:
+      - name: Validate secrets
+        run: |
+          if [ -z "${{ secrets.SLACK_WEBHOOK }}" ]; then
+            echo "❌ SLACK_WEBHOOK not set"
+            exit 1
+          fi
+          
+          if [ -z "${{ secrets.SERVER_DOMAIN }}" ]; then
+            echo "❌ SERVER_DOMAIN not set"
+            exit 1
+          fi
+          
+          if [ -z "${{ secrets.BASIC_AUTH }}" ]; then
+            echo "❌ BASIC_AUTH not set"
+            exit 1
+          fi
+          
+          echo "✅ All required secrets are configured"
+      
+      - name: Check server connectivity
+        continue-on-error: true
+        run: |
+          echo "Testing server connectivity..."
+          if curl -s -o /dev/null -w "%{http_code}" http://${{ secrets.SERVER_DOMAIN }}/health; then
+            echo "✅ Server is reachable"
+          else
+            echo "⚠️  Server might be unreachable"
+          fi
+
+  # Main scanning jobs - 20 parallel instances
+  scan:
+    name: Scanner Job ${{ matrix.job_id }}
+    runs-on: ubuntu-latest
+    needs: [metadata, validate-environment]
+    
+    # Matrix strategy for 20 parallel jobs
+    strategy:
+      max-parallel: 20
+      fail-fast: false  # Don't stop other jobs if one fails
+      matrix:
+        job_id: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+    
+    timeout-minutes: 30  # Max 30 minutes per job
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set executable permissions
+        run: |
+          chmod +x main.sh
+          chmod +x test.sh
+          chmod +x adder.sh
+      
+      - name: Display job information
+        run: |
+          echo "╔═══════════════════════════════════════════════════════════╗"
+          echo "║   Job ${{ matrix.job_id }} - Starting Subdomain Takeover Scan      ║"
+          echo "╚═══════════════════════════════════════════════════════════╝"
+          echo "Job ID: ${{ matrix.job_id }}"
+          echo "Run Number: ${{ github.run_number }}"
+          echo "Attempt: ${{ github.run_attempt }}"
+          echo "Runner: ${{ runner.os }} - ${{ runner.arch }}"
+          echo "Repository: ${{ github.repository }}"
+      
+      - name: Run subdomain takeover scanner
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SERVER_DOMAIN: ${{ secrets.SERVER_DOMAIN }}
+          BASIC_AUTH: ${{ secrets.BASIC_AUTH }}
+          JOB_ID: ${{ matrix.job_id }}
+        run: |
+          echo "Starting main.sh with Job ID: $JOB_ID"
+          ./main.sh
+      
+      - name: Upload results (on success)
+        if: success()
+        uses: actions/upload-artifact@v3
+        with:
+          name: scan-results-job-${{ matrix.job_id }}
+          path: results/
+          if-no-files-found: ignore
+          retention-days: 30
+      
+      - name: Collect logs
+        if: always()
+        run: |
+          echo "=== Collecting execution logs ==="
+          echo "Files in current directory:"
+          ls -lah
+          echo "Files in results directory:"
+          ls -lah results/ || echo "Results directory not found"
+      
+      - name: Report job failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data '{
+              "attachments": [{
+                "color": "danger",
+                "title": "Scanner Job Failed",
+                "text": "Job ${{ matrix.job_id }} failed on repository ${{ github.repository }}",
+                "fields": [
+                  {"title": "Job ID", "value": "${{ matrix.job_id }}", "short": true},
+                  {"title": "Run ID", "value": "${{ github.run_id }}", "short": true},
+                  {"title": "Repository", "value": "${{ github.repository }}", "short": false}
+                ],
+                "footer": "GitHub Actions - Production Workflow",
+                "ts": $(date +%s)
+              }]
+            }' \
+            "$SLACK_WEBHOOK" || true
+
+  # Summary job - runs after all scanning jobs complete
+  summary:
+    name: Workflow Summary
+    runs-on: ubuntu-latest
+    needs: [metadata, scan]
+    if: always()  # Run even if previous jobs fail
+    
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: all-results/
+      
+      - name: Generate summary report
+        run: |
+          echo "╔═══════════════════════════════════════════════════════════╗"
+          echo "║         Workflow Execution Summary Report                 ║"
+          echo "╚═══════════════════════════════════════════════════════════╝"
+          echo ""
+          echo "Workflow Information:"
+          echo "  Repository: ${{ github.repository }}"
+          echo "  Branch: ${{ github.ref_name }}"
+          echo "  Run ID: ${{ github.run_id }}"
+          echo "  Run Number: ${{ github.run_number }}"
+          echo "  Timestamp: ${{ needs.metadata.outputs.timestamp }}"
+          echo ""
+          echo "Job Results:"
+          echo "  Total Jobs: 20"
+          echo "  Status: ${{ job.status }}"
+          echo ""
+          echo "Artifacts:"
+          if [ -d "all-results/" ]; then
+            find all-results/ -type f | wc -l
+            echo " files collected"
+          else
+            echo "  No artifacts to collect"
+          fi
+      
+      - name: Send completion notification
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            COLOR="good"
+            STATUS="✅ SUCCESSFUL"
+          else
+            COLOR="warning"
+            STATUS="⚠️  COMPLETED WITH ISSUES"
+          fi
+          
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{
+              \"attachments\": [{
+                \"color\": \"$COLOR\",
+                \"title\": \"Workflow Execution Completed\",
+                \"text\": \"20 parallel scanning jobs completed\",
+                \"fields\": [
+                  {\"title\": \"Status\", \"value\": \"$STATUS\", \"short\": true},
+                  {\"title\": \"Repository\", \"value\": \"${{ github.repository }}\", \"short\": true},
+                  {\"title\": \"Run ID\", \"value\": \"${{ github.run_id }}\", \"short\": true},
+                  {\"title\": \"Timestamp\", \"value\": \"${{ needs.metadata.outputs.timestamp }}\", \"short\": true}
+                ],
+                \"footer\": \"GitHub Actions - Production Workflow\",
+                \"ts\": $(date +%s)
+              }]
+            }" \
+            "$SLACK_WEBHOOK" || true
+      
+      - name: Display completion message
+        run: |
+          echo "╔═══════════════════════════════════════════════════════════╗"
+          echo "║      🎉 Workflow Execution Completed Successfully! 🎉     ║"
+          echo "║                                                           ║"
+          echo "║  20 parallel scanning jobs have been executed            ║"
+          echo "║  Check GitHub Actions dashboard for detailed results    ║"
+          echo "╚═══════════════════════════════════════════════════════════╝"
