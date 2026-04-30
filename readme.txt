@@ -37,16 +37,16 @@ across multiple GitHub accounts:
   └──────────────────┘      └──────────────────┘      └──────────────────┘
          │                           │                           │
          ▼                           ▼                           ▼
-  - Uses gh CLI            - Parses credentials      - Pushes to all
+- Uses gh CLI            - Parses credentials      - Pushes to all
   - Creates repos          - Validates tokens       - Sends Slack
-  - Adds remotes           - Creates repos          notifications
-                            - Adds git remotes
+  - Pushes code          - Creates repos          notifications
+                             - Adds git remotes
 
  Each script serves a different purpose:
 
   • sync_github_accounts.sh — Uses gh CLI to switch between authenticated
-    accounts, create repos, and push code. Requires gh CLI to be installed
-    and authenticated with multiple accounts.
+    accounts and create repos, then push code. Requires gh CLI to be installed
+    and authenticated with multiple accounts. Does NOT add git remotes.
 
   • gitautomaterviaclaude.sh — A fully autonomous pipeline that parses raw
     credentials files, validates tokens via API, creates repos, and manages
@@ -59,7 +59,7 @@ across multiple GitHub accounts:
                     2. SYNC_GITHUB_ACCOUNTS.SH
 ================================================================================
 
-FILE: sync_github_accounts.sh (136 lines)
+FILE: sync_github_accounts.sh (130 lines)
 PURPOSE: Sync code to all authenticated GitHub accounts using gh CLI
 
 --------------------------------------------------------------------------------
@@ -69,8 +69,7 @@ This script uses the GitHub CLI (gh) to automatically:
 1. Detect all authenticated GitHub accounts
 2. For each account, check if a repository exists
 3. Create the repository if it doesn't exist
-4. Add a git remote for the new repository
-5. Push code to the new repository
+4. Push code to the new repository
 6. Track new repository URLs
 7. Send a summary notification to Slack
 
@@ -161,23 +160,17 @@ WORKFLOW DIAGRAM:
                    └─────────────────────┘
                              │
                   ┌──────────┴──────────┐
-                  │                     │
-                 Valid              Invalid
-                  │                     │
-                  ▼                     ▼
-         ┌──────────────┐      ┌──────────────┐
-         │Add git       │      │Log error,   │
-         │remote:      │      │increment    │
-         │git remote   │      │failed count │
-         │add user     │      │continue     │
-         └──────────────┘      └──────────────┘
-                  │
-                  ▼
-         ┌──────────────────────┐
-         │Push to remote:         │
-         │git push "https://     │
-         │$token@github.com/   │
-         │$user/repo.git"      │
+│                     │
+                  Valid              Invalid
+                   │                     │
+                   ▼                     ▼
+          ┌──────────────────────┐
+          │Push to remote:         │
+          │git push "https://     │
+          │$token@github.com/   │
+          │$user/repo.git"      │
+          │BRANCH               │
+          └──────────────────────┘
          │BRANCH               │
          └──────────────────────┘
                   │
