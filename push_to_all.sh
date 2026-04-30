@@ -1,9 +1,12 @@
 #!/bin/bash
 
 # ============================================================================
-# PUSH TO ALL REMOTES SCRIPT - With Retry Logic
-# Uses embedded tokens in git remotes (no gh CLI dependency)
-# Automatically retries failed pushes 3 times before marking as failed
+# PUSH TO ALL REMOTES SCRIPT - With Auto-Commit + Retry Logic
+# Features:
+# - Automatically stages and commits all changes with random message
+# - Uses embedded tokens in git remotes (no gh CLI dependency)
+# - Automatically retries failed pushes 3 times before marking as failed
+# - Sends Slack alerts on success/failure
 # ============================================================================
 
 REPO_NAME="githubstda"
@@ -12,15 +15,33 @@ WEBHOOK="YUhSMGNITTZMeTlvYjI5cmN5NXpiR0ZqYXk1amIyMHZjMlZ5ZG1salpYTXZWREJCTTBRd1U
 MAX_RETRIES=3
 RETRY_DELAY=2
 
+# Random commit message generators
+generate_commit_message() {
+    local messages=(
+        "Update: Auto-commit $(date +'%s')"
+        "Sync changes at $(date +'%H:%M:%S')"
+        "Automated push: $(date +'%Y-%m-%d')"
+        "Batch update with timestamp $(date +'%s')"
+        "Deploy changes: $(date +'%s | %H:%M:%S')"
+        "Scheduled commit $(date +'%Y-%m-%d %H:%M:%S')"
+        "Auto-sync repository $(date +'%s')"
+        "Pipeline update $(date +'%Y-%m-%d')"
+    )
+    local index=$((RANDOM % ${#messages[@]}))
+    echo "${messages[$index]}"
+}
+
 # Decode webhook
 DECODED_WEBHOOK=$(echo "$WEBHOOK" | base64 -d 2>/dev/null | base64 -d 2>/dev/null)
 
-echo "[$(date +'%H:%M:%S')] Starting push to all remotes..."
+echo "[$(date +'%H:%M:%S')] Starting auto-commit and push to all remotes..."
+echo ""
 
-# Check git status
-if ! git diff-index --quiet HEAD -- 2>/dev/null; then
-    echo "[✗] Uncommitted changes detected"
-    echo "Please commit changes first"
+# Verify branch exists
+if ! git rev-parse --verify "$BRANCH" > /dev/null 2>&1; then
+    echo "[✗] Branch '$BRANCH' does not exist"
+    echo "Available branches:"
+    git branch -a
     exit 1
 fi
 
@@ -38,6 +59,44 @@ if [ -z "$remotes" ]; then
     echo "[✗] No remotes found"
     exit 1
 fi
+
+# ============================================================================
+# PHASE 1: AUTO-COMMIT CHANGES
+# ============================================================================
+
+echo "==============================================="
+echo "PHASE 1: GIT AUTO-COMMIT"
+echo "==============================================="
+echo ""
+
+# Check if there are any changes to commit
+if git diff-index --quiet HEAD -- 2>/dev/null && [ -z "$(git ls-files --others --exclude-standard)" ]; then
+    echo "[ℹ] No changes detected - proceeding with push"
+else
+    echo "[*] Staging all changes..."
+    git add .
+    
+    if [ $? -ne 0 ]; then
+        echo "[✗] Failed to stage changes"
+        exit 1
+    fi
+    
+    # Generate random commit message
+    COMMIT_MSG=$(generate_commit_message)
+    echo "[*] Generated commit message: '$COMMIT_MSG'"
+    
+    # Commit changes
+    git commit -m "$COMMIT_MSG" 2>&1 | sed 's/^/  /'
+    
+    if [ $? -ne 0 ]; then
+        echo "[✗] Failed to commit changes"
+        exit 1
+    fi
+    
+    echo "[✓] Successfully committed changes"
+fi
+
+echo ""
 
 success=0
 failed=0
@@ -66,7 +125,7 @@ send_slack_alert() {
 
 echo ""
 echo "==============================================="
-echo "PUSHING TO ALL REMOTES"
+echo "PHASE 2: PUSH TO ALL REMOTES WITH RETRY LOGIC"
 echo "==============================================="
 echo ""
 
@@ -119,7 +178,7 @@ done
 
 # Summary Report
 echo "==============================================="
-echo "PUSH SUMMARY"
+echo "EXECUTION SUMMARY"
 echo "==============================================="
 echo "Successful: $success / $(($success + $failed))"
 echo "Failed: $failed / $(($success + $failed))"
