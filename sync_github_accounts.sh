@@ -80,12 +80,6 @@ while read -r user; do
                 continue
             fi
             
-            # Add remote
-            if ! git remote get-url "$user" > /dev/null 2>&1; then
-                git remote add "$user" "https://github.com/$user/$REPO_NAME.git"
-                echo "  [✓] Remote added"
-            fi
-            
             # Push to new repo
             echo "  [*] Pushing code..."
             if git push "https://$token@github.com/$user/$REPO_NAME.git" "$BRANCH" 2>&1 | grep -qE "new branch|master ->" ; then
