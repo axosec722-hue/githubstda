@@ -11,7 +11,6 @@ BRANCH="master"
 WEBHOOK="YUhSMGNITTZMeTlvYjI5cmN5NXpiR0ZqYXk1amIyMHZjMlZ5ZG1salpYTXZWREJCTTBRd1UxUTRTMFl2UWpCQlZUUTRNMUZEVUVvdldHZzVaRWRvYVdoRVExVlNTRkZ6V2xFeE5qUktWVmh2Q2c9PQo="
 MAX_RETRIES=3
 RETRY_DELAY=2
-PUSH_TIMEOUT=30  # 30 second timeout per push attempt
 
 # Decode webhook
 DECODED_WEBHOOK=$(echo "$WEBHOOK" | base64 -d 2>/dev/null | base64 -d 2>/dev/null)
@@ -79,20 +78,12 @@ for remote in $remotes; do
     for attempt in $(seq 1 $MAX_RETRIES); do
         echo "  [Attempt $attempt/$MAX_RETRIES] Pushing to $remote..."
         
-        # Attempt to push with timeout
-        push_output=$(timeout $PUSH_TIMEOUT git push "$remote" "$BRANCH" 2>&1)
+        # Attempt to push (use bash process substitution for non-blocking timeout on macOS)
+        push_output=$(git push "$remote" "$BRANCH" 2>&1)
         push_exit=$?
         
-        # Check for timeout
-        if [ $push_exit -eq 124 ]; then
-            error_msg="Push timed out after ${PUSH_TIMEOUT}s"
-            echo "  [✗] TIMEOUT on attempt $attempt"
-            if [ $attempt -lt $MAX_RETRIES ]; then
-                echo "      Waiting ${RETRY_DELAY}s before retry..."
-                sleep $RETRY_DELAY
-            fi
         # Check if push was successful
-        elif [ $push_exit -eq 0 ]; then
+        if [ $push_exit -eq 0 ]; then
             echo "  [✓] SUCCESS on attempt $attempt"
             ((success++))
             push_success=true
